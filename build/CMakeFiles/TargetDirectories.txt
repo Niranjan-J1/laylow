@@ -1,0 +1,4 @@
+C:/Users/niran/OneDrive/Desktop/Laylow/build/CMakeFiles/laylow_engine.dir
+C:/Users/niran/OneDrive/Desktop/Laylow/build/CMakeFiles/laylow.dir
+C:/Users/niran/OneDrive/Desktop/Laylow/build/CMakeFiles/edit_cache.dir
+C:/Users/niran/OneDrive/Desktop/Laylow/build/CMakeFiles/rebuild_cache.dir
