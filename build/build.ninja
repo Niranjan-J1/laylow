@@ -52,7 +52,7 @@ build cmake_object_order_depends_target_laylow_engine: phony || .
 build CMakeFiles/laylow_engine.dir/engine/src/gguf.cpp.obj: CXX_COMPILER__laylow_engine_unscanned_Release C$:/Users/niran/OneDrive/Desktop/Laylow/engine/src/gguf.cpp || cmake_object_order_depends_target_laylow_engine
   CONFIG = Release
   DEP_FILE = CMakeFiles\laylow_engine.dir\engine\src\gguf.cpp.obj.d
-  FLAGS = -O3 -DNDEBUG -std=gnu++17 -mavx2 -mfma -O3 -march=native
+  FLAGS = -O3 -DNDEBUG -std=c++17 -std=c++17 -mavx2 -mfma -O3 -march=native
   INCLUDES = -IC:/Users/niran/OneDrive/Desktop/Laylow/engine/include
   OBJECT_DIR = CMakeFiles\laylow_engine.dir
   OBJECT_FILE_DIR = CMakeFiles\laylow_engine.dir\engine\src
@@ -63,7 +63,7 @@ build CMakeFiles/laylow_engine.dir/engine/src/gguf.cpp.obj: CXX_COMPILER__laylow
 build CMakeFiles/laylow_engine.dir/engine/src/tensor.cpp.obj: CXX_COMPILER__laylow_engine_unscanned_Release C$:/Users/niran/OneDrive/Desktop/Laylow/engine/src/tensor.cpp || cmake_object_order_depends_target_laylow_engine
   CONFIG = Release
   DEP_FILE = CMakeFiles\laylow_engine.dir\engine\src\tensor.cpp.obj.d
-  FLAGS = -O3 -DNDEBUG -std=gnu++17 -mavx2 -mfma -O3 -march=native
+  FLAGS = -O3 -DNDEBUG -std=c++17 -std=c++17 -mavx2 -mfma -O3 -march=native
   INCLUDES = -IC:/Users/niran/OneDrive/Desktop/Laylow/engine/include
   OBJECT_DIR = CMakeFiles\laylow_engine.dir
   OBJECT_FILE_DIR = CMakeFiles\laylow_engine.dir\engine\src
@@ -74,7 +74,7 @@ build CMakeFiles/laylow_engine.dir/engine/src/tensor.cpp.obj: CXX_COMPILER__layl
 build CMakeFiles/laylow_engine.dir/engine/src/matmul.cpp.obj: CXX_COMPILER__laylow_engine_unscanned_Release C$:/Users/niran/OneDrive/Desktop/Laylow/engine/src/matmul.cpp || cmake_object_order_depends_target_laylow_engine
   CONFIG = Release
   DEP_FILE = CMakeFiles\laylow_engine.dir\engine\src\matmul.cpp.obj.d
-  FLAGS = -O3 -DNDEBUG -std=gnu++17 -mavx2 -mfma -O3 -march=native
+  FLAGS = -O3 -DNDEBUG -std=c++17 -std=c++17 -mavx2 -mfma -O3 -march=native
   INCLUDES = -IC:/Users/niran/OneDrive/Desktop/Laylow/engine/include
   OBJECT_DIR = CMakeFiles\laylow_engine.dir
   OBJECT_FILE_DIR = CMakeFiles\laylow_engine.dir\engine\src
@@ -85,7 +85,7 @@ build CMakeFiles/laylow_engine.dir/engine/src/matmul.cpp.obj: CXX_COMPILER__layl
 build CMakeFiles/laylow_engine.dir/engine/src/transformer.cpp.obj: CXX_COMPILER__laylow_engine_unscanned_Release C$:/Users/niran/OneDrive/Desktop/Laylow/engine/src/transformer.cpp || cmake_object_order_depends_target_laylow_engine
   CONFIG = Release
   DEP_FILE = CMakeFiles\laylow_engine.dir\engine\src\transformer.cpp.obj.d
-  FLAGS = -O3 -DNDEBUG -std=gnu++17 -mavx2 -mfma -O3 -march=native
+  FLAGS = -O3 -DNDEBUG -std=c++17 -std=c++17 -mavx2 -mfma -O3 -march=native
   INCLUDES = -IC:/Users/niran/OneDrive/Desktop/Laylow/engine/include
   OBJECT_DIR = CMakeFiles\laylow_engine.dir
   OBJECT_FILE_DIR = CMakeFiles\laylow_engine.dir\engine\src
@@ -96,7 +96,7 @@ build CMakeFiles/laylow_engine.dir/engine/src/transformer.cpp.obj: CXX_COMPILER_
 build CMakeFiles/laylow_engine.dir/engine/src/tokenizer.cpp.obj: CXX_COMPILER__laylow_engine_unscanned_Release C$:/Users/niran/OneDrive/Desktop/Laylow/engine/src/tokenizer.cpp || cmake_object_order_depends_target_laylow_engine
   CONFIG = Release
   DEP_FILE = CMakeFiles\laylow_engine.dir\engine\src\tokenizer.cpp.obj.d
-  FLAGS = -O3 -DNDEBUG -std=gnu++17 -mavx2 -mfma -O3 -march=native
+  FLAGS = -O3 -DNDEBUG -std=c++17 -std=c++17 -mavx2 -mfma -O3 -march=native
   INCLUDES = -IC:/Users/niran/OneDrive/Desktop/Laylow/engine/include
   OBJECT_DIR = CMakeFiles\laylow_engine.dir
   OBJECT_FILE_DIR = CMakeFiles\laylow_engine.dir\engine\src
@@ -135,7 +135,7 @@ build cmake_object_order_depends_target_laylow: phony || cmake_object_order_depe
 build CMakeFiles/laylow.dir/engine/src/main.cpp.obj: CXX_COMPILER__laylow_unscanned_Release C$:/Users/niran/OneDrive/Desktop/Laylow/engine/src/main.cpp || cmake_object_order_depends_target_laylow
   CONFIG = Release
   DEP_FILE = CMakeFiles\laylow.dir\engine\src\main.cpp.obj.d
-  FLAGS = -O3 -DNDEBUG -std=gnu++17 -mavx2 -mfma -O3 -march=native
+  FLAGS = -O3 -DNDEBUG -std=c++17 -std=c++17 -mavx2 -mfma -O3 -march=native
   INCLUDES = -IC:/Users/niran/OneDrive/Desktop/Laylow/engine/include
   OBJECT_DIR = CMakeFiles\laylow.dir
   OBJECT_FILE_DIR = CMakeFiles\laylow.dir\engine\src
