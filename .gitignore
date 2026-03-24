@@ -1,0 +1,23 @@
+# Build output
+build/
+
+# Model files - too large for GitHub
+models/
+
+# Compiled binaries
+*.exe
+*.o
+*.a
+*.dll
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
