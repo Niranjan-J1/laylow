@@ -1,10 +1,9 @@
 # ninja log v7
-6	181	7960128441683201	CMakeFiles/laylow_engine.dir/engine/src/gguf.cpp.obj	c8d32f5eace4e969
-17	188	7960128441784527	CMakeFiles/laylow_engine.dir/engine/src/tensor.cpp.obj	1823f345ac4e4a53
-26	191	7960128441869905	CMakeFiles/laylow_engine.dir/engine/src/matmul.cpp.obj	a2b8cc75a8465d89
-33	193	7960128441948258	CMakeFiles/laylow_engine.dir/engine/src/transformer.cpp.obj	e34fa4cca422c134
-45	200	7960128442068983	CMakeFiles/laylow_engine.dir/engine/src/tokenizer.cpp.obj	d443525e94c3c735
-61	227	7960128442231489	CMakeFiles/laylow.dir/engine/src/main.cpp.obj	168b23385dac94d1
-200	784	7960128443612309	liblaylow_engine.a	5d57c7aa4819de82
-43	4500	7960129014608342	CMakeFiles/laylow.dir/engine/src/main.cpp.obj	168b23385dac94d1
-4504	4703	7960129059249477	laylow.exe	4f7fe4b682f76f81
+28	171	7960136766369900	CMakeFiles/laylow_engine.dir/engine/src/matmul.cpp.obj	a2b8cc75a8465d89
+6	175	7960136766157531	CMakeFiles/laylow_engine.dir/engine/src/gguf.cpp.obj	c8d32f5eace4e969
+38	176	7960136766456650	CMakeFiles/laylow_engine.dir/engine/src/transformer.cpp.obj	e34fa4cca422c134
+45	181	7960136766558992	CMakeFiles/laylow_engine.dir/engine/src/tokenizer.cpp.obj	d443525e94c3c735
+59	681	7960136766696524	CMakeFiles/laylow.dir/engine/src/main.cpp.obj	168b23385dac94d1
+19	811	7960136766285132	CMakeFiles/laylow_engine.dir/engine/src/tensor.cpp.obj	1823f345ac4e4a53
+811	962	7960136774210652	liblaylow_engine.a	5d57c7aa4819de82
+963	1160	7960136775733429	laylow.exe	4f7fe4b682f76f81
