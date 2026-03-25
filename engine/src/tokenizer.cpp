@@ -2,68 +2,100 @@
 #include "gguf.h"
 #include <stdexcept>
 #include <iostream>
+#include <sstream>
 
 namespace laylow {
 
 void Tokenizer::load_from_gguf(
     const std::unordered_map<std::string, GGUFValue>& metadata)
 {
-    // GGUF stores the vocabulary as an array under this key.
-    // Each element is a string token in order of its ID.
-    // We stored arrays as "[array]" placeholder strings so we
-    // need to find the tokens a different way - they are stored
-    // as individual keys: tokenizer.ggml.tokens
-    // TinyLlama/LLaMA stores them packed in the tensor data.
-    // For now we build a simple character-level fallback vocab
-    // and will load the real BPE vocab from tensor data next step.
-
-    // Check if we have vocab size in metadata
-    auto it = metadata.find("tokenizer.ggml.tokens");
-    if (it != metadata.end()) {
-        std::cout << "Found tokenizer.ggml.tokens in metadata" << std::endl;
-    }
-
-    // Build a basic printable ASCII vocab as fallback
-    // This lets us test the pipeline before full BPE is wired up
     id_to_token.clear();
     token_to_id.clear();
 
-    // Reserve slots 0-2 for special tokens
-    id_to_token.push_back("<unk>");   // 0
-    id_to_token.push_back("<s>");     // 1 - BOS
-    id_to_token.push_back("</s>");    // 2 - EOS
-
-    // Add printable ASCII characters as single-char tokens
-    for (int c = 32; c < 127; c++) {
-        std::string tok(1, (char)c);
-        token_to_id[tok] = (int)id_to_token.size();
-        id_to_token.push_back(tok);
+    // Look for the token array stored under this key
+    auto it = metadata.find("tokenizer.ggml.tokens");
+    if (it == metadata.end()) {
+        std::cerr << "Warning: no tokenizer.ggml.tokens found, "
+                     "using fallback ASCII vocab" << std::endl;
+        // Fallback ASCII vocab
+        id_to_token.push_back("<unk>");
+        id_to_token.push_back("<s>");
+        id_to_token.push_back("</s>");
+        for (int c = 32; c < 127; c++)
+            id_to_token.push_back(std::string(1, (char)c));
+        for (int i = 0; i < (int)id_to_token.size(); i++)
+            token_to_id[id_to_token[i]] = i;
+        std::cout << "Tokenizer ready: " << vocab_size()
+                  << " tokens (fallback)" << std::endl;
+        return;
     }
 
-    // Build reverse lookup for special tokens
-    token_to_id["<unk>"] = 0;
-    token_to_id["<s>"]   = 1;
-    token_to_id["</s>"]  = 2;
+    // The array was stored as a single string joined by \x01 separators
+    const std::string& joined = std::get<std::string>(it->second);
 
-    std::cout << "Tokenizer ready: " << vocab_size()
-              << " tokens (fallback ASCII vocab)" << std::endl;
+    // Split on \x01 to recover individual tokens
+    std::string tok;
+    int id = 0;
+    for (char c : joined) {
+        if (c == '\x01') {
+            id_to_token.push_back(tok);
+            token_to_id[tok] = id++;
+            tok.clear();
+        } else {
+            tok += c;
+        }
+    }
+    // Last token
+    if (!tok.empty()) {
+        id_to_token.push_back(tok);
+        token_to_id[tok] = id;
+    }
+
+    // Find special token IDs
+    auto find_id = [&](const std::string& s) {
+        auto it = token_to_id.find(s);
+        return it != token_to_id.end() ? it->second : -1;
+    };
+
+    int bos = find_id("<s>");
+    int eos = find_id("</s>");
+    int unk = find_id("<unk>");
+    if (bos >= 0) bos_id = bos;
+    if (eos >= 0) eos_id = eos;
+    if (unk >= 0) unk_id = unk;
+
+    std::cout << "Tokenizer ready: " << vocab_size() << " tokens"
+              << "  bos=" << bos_id
+              << "  eos=" << eos_id << std::endl;
 }
 
 std::vector<int> Tokenizer::encode(const std::string& text) const {
     std::vector<int> ids;
-
-    // Always start with BOS token
     ids.push_back(bos_id);
 
-    // Simple character-level tokenization
-    // Each character becomes one token
-    for (char c : text) {
-        std::string tok(1, c);
-        auto it = token_to_id.find(tok);
-        if (it != token_to_id.end()) {
-            ids.push_back(it->second);
-        } else {
+    // Greedy longest-match tokenization
+    int i = 0;
+    while (i < (int)text.size()) {
+        // Try matching the longest token starting at position i
+        int best_len = -1;
+        int best_id  = unk_id;
+
+        for (int len = (int)text.size() - i; len >= 1; len--) {
+            std::string sub = text.substr(i, len);
+            auto it = token_to_id.find(sub);
+            if (it != token_to_id.end()) {
+                best_len = len;
+                best_id  = it->second;
+                break;
+            }
+        }
+
+        if (best_len < 1) {
             ids.push_back(unk_id);
+            i++;
+        } else {
+            ids.push_back(best_id);
+            i += best_len;
         }
     }
 
@@ -72,16 +104,20 @@ std::vector<int> Tokenizer::encode(const std::string& text) const {
 
 std::string Tokenizer::decode(const std::vector<int>& ids) const {
     std::string result;
-
     for (int id : ids) {
-        // Skip special tokens in output
         if (id == bos_id || id == eos_id) continue;
-
         if (id >= 0 && id < (int)id_to_token.size()) {
-            result += id_to_token[id];
+            std::string tok = id_to_token[id];
+            // LLaMA uses \u2581 (▁) as a space prefix
+            // Replace it with a real space
+            size_t pos = 0;
+            while ((pos = tok.find("\xe2\x96\x81", pos)) != std::string::npos) {
+                tok.replace(pos, 3, " ");
+                pos++;
+            }
+            result += tok;
         }
     }
-
     return result;
 }
 

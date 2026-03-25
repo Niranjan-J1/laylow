@@ -52,6 +52,17 @@ static GGUFValue read_value(std::ifstream& f, GGUFType type) {
         case GGUFType::ARRAY: {
             auto elem_type = static_cast<GGUFType>(read_val<uint32_t>(f));
             uint64_t count = read_val<uint64_t>(f);
+            // For string arrays we concatenate with a separator
+            // so the tokenizer can split them back out
+            if (elem_type == GGUFType::STRING) {
+                std::string joined;
+                for (uint64_t i = 0; i < count; i++) {
+                    if (i > 0) joined += '\x01'; // unit separator
+                    joined += read_string(f);
+                }
+                return joined;
+            }
+            // For non-string arrays just skip
             for (uint64_t i = 0; i < count; i++)
                 read_value(f, elem_type);
             return std::string("[array]");
