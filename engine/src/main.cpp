@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cmath>
+#include <string>
 #include "tensor.h"
 #include "matmul.h"
 #include "gguf.h"
@@ -11,75 +12,71 @@ int main(int argc, char* argv[]) {
     std::cout << "AVX2 SIMD enabled" << std::endl;
     std::cout << std::endl;
 
-    if (argc > 1) {
-        std::string path = argv[1];
-        std::cout << "Loading model: " << path << std::endl;
+    if (argc < 2) {
+        std::cout << "Usage: laylow <model.gguf> [prompt] [max_tokens]" << std::endl;
+        std::cout << "Example: laylow tinyllama.gguf \"Once upon a time\" 50" << std::endl;
+        return 0;
+    }
 
-        try {
-            // Load model
-            auto gguf = laylow::gguf_load(path);
+    std::string model_path = argv[1];
+    std::string prompt     = argc > 2 ? argv[2] : "Once upon a time";
+    int max_new_tokens     = argc > 3 ? std::stoi(argv[3]) : 30;
 
-            // Load tokenizer
-            laylow::Tokenizer tok;
-            tok.load_from_gguf(gguf.metadata);
+    try {
+        // Load model
+        std::cout << "Loading model: " << model_path << std::endl;
+        auto gguf = laylow::gguf_load(model_path);
 
-            // Load transformer weights
-            laylow::Transformer transformer;
-            transformer.load(gguf);
+        // Load tokenizer
+        laylow::Tokenizer tok;
+        tok.load_from_gguf(gguf.metadata);
 
-            // Encode a prompt
-            std::string prompt = "Hello";
-            auto ids = tok.encode(prompt);
+        // Load transformer
+        laylow::Transformer transformer;
+        transformer.load(gguf);
 
-            std::cout << std::endl;
-            std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
-            std::cout << "Running forward pass..." << std::endl;
+        // Encode prompt
+        auto ids = tok.encode(prompt);
+        std::cout << std::endl;
+        std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
+        std::cout << "Prompt tokens: " << ids.size() << std::endl;
+        std::cout << std::endl;
+        std::cout << prompt;
+        std::cout.flush();
 
-            // Run forward pass
+        // Generation loop
+        for (int i = 0; i < max_new_tokens; i++) {
+            // Forward pass on current token sequence
             auto logits = transformer.forward(ids);
 
             // Pick next token
             int next_id = transformer.sample_greedy(logits);
+
+            // Stop if we hit end of sequence
+            if (next_id == tok.eos_id) {
+                std::cout << std::endl;
+                std::cout << "[EOS]" << std::endl;
+                break;
+            }
+
+            // Decode and print the new token immediately
             std::string next_tok = tok.decode({next_id});
+            std::cout << next_tok;
+            std::cout.flush();
 
-            std::cout << "Next token ID: " << next_id << std::endl;
-            std::cout << "Next token:    \"" << next_tok << "\"" << std::endl;
-            std::cout << std::endl;
-            std::cout << "Forward pass complete" << std::endl;
-
-        } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
-            return 1;
+            // Add to sequence for next iteration
+            ids.push_back(next_id);
         }
-        return 0;
+
+        std::cout << std::endl;
+        std::cout << std::endl;
+        std::cout << "Generated " << max_new_tokens
+                  << " tokens" << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
     }
 
-    // Matmul test
-    int M = 32, K = 64, N = 32;
-    auto A      = laylow::Tensor::empty("A",        laylow::DType::F32, {M, K});
-    auto B      = laylow::Tensor::empty("B",        laylow::DType::F32, {K, N});
-    auto C_ref  = laylow::Tensor::empty("C_scalar", laylow::DType::F32, {M, N});
-    auto C_fast = laylow::Tensor::empty("C_avx2",   laylow::DType::F32, {M, N});
-
-    float* a = static_cast<float*>(A.data);
-    float* b = static_cast<float*>(B.data);
-    for (int i = 0; i < M * K; i++) a[i] = i * 0.01f;
-    for (int i = 0; i < K * N; i++) b[i] = i * 0.01f;
-
-    laylow::matmul_scalar(a, b, static_cast<float*>(C_ref.data),  M, K, N);
-    laylow::matmul_avx2  (a, b, static_cast<float*>(C_fast.data), M, K, N);
-
-    bool ok = true;
-    float* r  = static_cast<float*>(C_ref.data);
-    float* ff = static_cast<float*>(C_fast.data);
-    for (int i = 0; i < M * N; i++) {
-        if (std::fabs(r[i] - ff[i]) > 1e-1f) { ok = false; break; }
-    }
-
-    std::cout << "matmul [" << M << "x" << K << "] * ["
-              << K << "x" << N << "] = [" << M << "x" << N << "]" << std::endl;
-    std::cout << "scalar vs AVX2: " << (ok ? "MATCH" : "FAIL") << std::endl;
-
-    A.free_data(); B.free_data(); C_ref.free_data(); C_fast.free_data();
-    return ok ? 0 : 1;
+    return 0;
 }
