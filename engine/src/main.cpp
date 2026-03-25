@@ -4,6 +4,7 @@
 #include "matmul.h"
 #include "gguf.h"
 #include "tokenizer.h"
+#include "transformer.h"
 
 int main(int argc, char* argv[]) {
     std::cout << "laylow v0.1.0 - local LLM inference engine" << std::endl;
@@ -15,26 +16,36 @@ int main(int argc, char* argv[]) {
         std::cout << "Loading model: " << path << std::endl;
 
         try {
+            // Load model
             auto gguf = laylow::gguf_load(path);
-            std::cout << "Model loaded OK" << std::endl;
-            std::cout << std::endl;
 
+            // Load tokenizer
             laylow::Tokenizer tok;
             tok.load_from_gguf(gguf.metadata);
 
-            std::string prompt = "Hello laylow";
+            // Load transformer weights
+            laylow::Transformer transformer;
+            transformer.load(gguf);
+
+            // Encode a prompt
+            std::string prompt = "Hello";
             auto ids = tok.encode(prompt);
 
-            std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
-            std::cout << "Token IDs: ";
-            for (int id : ids) std::cout << id << " ";
             std::cout << std::endl;
+            std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
+            std::cout << "Running forward pass..." << std::endl;
 
-            std::string decoded = tok.decode(ids);
-            std::cout << "Decoded:  \"" << decoded << "\"" << std::endl;
-            std::cout << "Roundtrip: "
-                      << (decoded == prompt ? "PASS" : "FAIL")
-                      << std::endl;
+            // Run forward pass
+            auto logits = transformer.forward(ids);
+
+            // Pick next token
+            int next_id = transformer.sample_greedy(logits);
+            std::string next_tok = tok.decode({next_id});
+
+            std::cout << "Next token ID: " << next_id << std::endl;
+            std::cout << "Next token:    \"" << next_tok << "\"" << std::endl;
+            std::cout << std::endl;
+            std::cout << "Forward pass complete" << std::endl;
 
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << std::endl;
@@ -43,7 +54,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // Matmul test when no model provided
+    // Matmul test
     int M = 32, K = 64, N = 32;
     auto A      = laylow::Tensor::empty("A",        laylow::DType::F32, {M, K});
     auto B      = laylow::Tensor::empty("B",        laylow::DType::F32, {K, N});

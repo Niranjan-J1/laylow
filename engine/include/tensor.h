@@ -34,6 +34,14 @@ struct Tensor {
 
     // Release the memory
     void free_data();
+
+
 };
+
+        // Dequantize a Q4_0 tensor into a new F32 tensor
+Tensor dequantize_q4(const Tensor& src);
+
+    // Dequantize a Q8_0 tensor into a new F32 tensor  
+Tensor dequantize_q8(const Tensor& src);
 
 } // namespace laylow
