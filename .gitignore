@@ -21,3 +21,7 @@ Desktop.ini
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
+
+venv/
+__pycache__/
+*.pyc
