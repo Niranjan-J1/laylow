@@ -40,6 +40,7 @@ struct TransformerConfig {
     int n_layers  = 0;
     int head_dim  = 0;  // n_embd / n_heads
     float norm_eps= 1e-5f;
+    int n_ffn = 5632;
 };
 
 struct Transformer {
@@ -53,9 +54,15 @@ struct Transformer {
     // tokens: sequence of token IDs
     std::vector<float> forward(const std::vector<int>& tokens);
 
+    void apply_rep_penalty(std::vector<float>& logits,
+                           const std::vector<int>& prev_tokens,
+                           float penalty = 1.3f);
+
     // Sample the next token from logits (greedy - pick highest)
     int sample_greedy(const std::vector<float>& logits);
-
+    int sample_temperature(const std::vector<float>& logits, float temp = 0.8f);
+    int sample_topp(const std::vector<float>& logits,
+                    float temp = 0.9f, float top_p = 0.9f);
     std::vector<Tensor> dequantized_; // holds dequantized weight buffers
 };
 

@@ -52,17 +52,17 @@ static GGUFValue read_value(std::ifstream& f, GGUFType type) {
         case GGUFType::ARRAY: {
             auto elem_type = static_cast<GGUFType>(read_val<uint32_t>(f));
             uint64_t count = read_val<uint64_t>(f);
-            // For string arrays we concatenate with a separator
-            // so the tokenizer can split them back out
+            // String arrays are concatenated with a unit-separator so the
+            // tokenizer can split them back out without a separate code path.
             if (elem_type == GGUFType::STRING) {
                 std::string joined;
                 for (uint64_t i = 0; i < count; i++) {
-                    if (i > 0) joined += '\x01'; // unit separator
+                    if (i > 0) joined += '\x01';
                     joined += read_string(f);
                 }
                 return joined;
             }
-            // For non-string arrays just skip
+            // Non-string arrays: skip elements (we only need string metadata)
             for (uint64_t i = 0; i < count; i++)
                 read_value(f, elem_type);
             return std::string("[array]");
@@ -150,6 +150,7 @@ GGUFFile gguf_load(const std::string& path) {
         for (uint32_t dim = 0; dim < n_dims; dim++)
             d.shape.push_back((int64_t)read_val<uint64_t>(f));
 
+        // GGUF stores dimensions in reverse order (innermost first)
         std::reverse(d.shape.begin(), d.shape.end());
 
         d.ggml_type_raw = read_val<uint32_t>(f);
@@ -159,6 +160,9 @@ GGUFFile gguf_load(const std::string& path) {
             case GGMLType::F16:  d.dtype = DType::F16;  break;
             case GGMLType::Q4_0: d.dtype = DType::Q4_0; break;
             case GGMLType::Q8_0: d.dtype = DType::Q8_0; break;
+            case GGMLType::Q6_K: d.dtype = DType::Q6_K; break;
+            // Other K-quants: map to Q4_0 as a placeholder so at least
+            // the correct byte size is still computed from ggml_type_raw.
             case GGMLType::Q4_1:
             case GGMLType::Q5_0:
             case GGMLType::Q5_1:
@@ -166,48 +170,51 @@ GGUFFile gguf_load(const std::string& path) {
             case GGMLType::Q3_K:
             case GGMLType::Q4_K:
             case GGMLType::Q5_K:
-            case GGMLType::Q6_K:
             case GGMLType::Q8_K:
             case GGMLType::Q8_1:
                 d.dtype = DType::Q4_0;
+                std::cerr << "GGUF: unsupported quant type " << d.ggml_type_raw
+                          << " for " << d.name << ", treating as opaque" << std::endl;
                 break;
             default:
-                std::cerr << "GGUF: skipping unknown dtype "
-                          << (uint32_t)ggml_type
-                          << " for: " << d.name << std::endl;
+                std::cerr << "GGUF: unknown dtype " << d.ggml_type_raw
+                          << " for " << d.name << std::endl;
                 d.dtype = DType::F32;
                 break;
         }
         d.offset = read_val<uint64_t>(f);
 
-        // Calculate actual byte size on disk for this tensor
-        int64_t n = 1;
-        for (auto s : d.shape) n *= s;
+        // Compute on-disk byte size from raw GGML type (authoritative)
+        int64_t n_elem = 1;
+        for (auto s : d.shape) n_elem *= s;
         switch (d.ggml_type_raw) {
-            case 0:  d.nbytes = n * 4; break;           // F32
-            case 1:  d.nbytes = n * 2; break;           // F16
-            case 2:  d.nbytes = (n / 32) * 18; break;   // Q4_0
-            case 8:  d.nbytes = (n / 32) * 34; break;   // Q8_0
-            case 10: d.nbytes = (n / 256) * 84; break;  // Q2_K
-            case 11: d.nbytes = (n / 256) * 110; break; // Q3_K
-            case 12: d.nbytes = (n / 256) * 144; break; // Q4_K
-            case 13: d.nbytes = (n / 256) * 176; break; // Q5_K
-            case 14: d.nbytes = (n / 256) * 210; break; // Q6_K
-            default: d.nbytes = n * 4; break;
+            case  0: d.nbytes = n_elem * 4;               break; // F32
+            case  1: d.nbytes = n_elem * 2;               break; // F16
+            case  2: d.nbytes = (n_elem / 32)  * 18;     break; // Q4_0
+            case  8: d.nbytes = (n_elem / 32)  * 34;     break; // Q8_0
+            case 10: d.nbytes = (n_elem / 256) * 84;     break; // Q2_K
+            case 11: d.nbytes = (n_elem / 256) * 110;    break; // Q3_K
+            case 12: d.nbytes = (n_elem / 256) * 144;    break; // Q4_K
+            case 13: d.nbytes = (n_elem / 256) * 176;    break; // Q5_K
+            case 14: d.nbytes = (n_elem / 256) * 210;    break; // Q6_K
+            default: d.nbytes = n_elem * 4;               break;
         }
         descs.push_back(std::move(d));
     }
 
+    // Tensor data begins at the next 32-byte aligned position after the header
     uint64_t pos         = (uint64_t)f.tellg();
     uint64_t aligned_pos = (pos + 31) & ~31ULL;
     f.seekg(aligned_pos);
-
-    uint64_t data_start = (uint64_t)f.tellg();
+    uint64_t data_start  = (uint64_t)f.tellg();
 
     for (auto& d : descs) {
-        Tensor t    = Tensor::empty(d.name, d.dtype, d.shape);
-        t.nbytes    = d.nbytes;
-        t.data      = _aligned_malloc(d.nbytes, 32);
+        Tensor t;
+        t.name   = d.name;
+        t.dtype  = d.dtype;
+        t.shape  = d.shape;
+        t.nbytes = d.nbytes;
+        t.data   = _aligned_malloc(d.nbytes, 32);
         if (!t.data) throw std::runtime_error("GGUF: alloc failed: " + d.name);
         f.seekg(data_start + d.offset);
         f.read(static_cast<char*>(t.data), d.nbytes);

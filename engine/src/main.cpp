@@ -1,5 +1,4 @@
 #include <iostream>
-#include <cmath>
 #include <string>
 #include "tensor.h"
 #include "matmul.h"
@@ -23,55 +22,47 @@ int main(int argc, char* argv[]) {
     int max_new_tokens     = argc > 3 ? std::stoi(argv[3]) : 30;
 
     try {
-        // Load model
         std::cout << "Loading model: " << model_path << std::endl;
         auto gguf = laylow::gguf_load(model_path);
 
-        // Load tokenizer
         laylow::Tokenizer tok;
         tok.load_from_gguf(gguf.metadata);
 
-        // Load transformer
         laylow::Transformer transformer;
         transformer.load(gguf);
 
-        // Encode prompt
         auto ids = tok.encode(prompt);
+        
+        std::cout << "Prompt: \"" << prompt << "\""
+                  << "  (" << ids.size() << " tokens)" << std::endl;
         std::cout << std::endl;
-        std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
-        std::cout << "Prompt tokens: " << ids.size() << std::endl;
-        std::cout << std::endl;
+
+        // Stream the prompt text first, then generated tokens
         std::cout << prompt;
         std::cout.flush();
 
-        // Generation loop
+        srand(42);
+
         for (int i = 0; i < max_new_tokens; i++) {
-            // Forward pass on current token sequence
             auto logits = transformer.forward(ids);
+            transformer.apply_rep_penalty(logits, ids, 1.3f);
+            int next_id = transformer.sample_topp(logits, 1.1f, 0.95f);
 
-            // Pick next token
-            int next_id = transformer.sample_greedy(logits);
-
-            // Stop if we hit end of sequence
             if (next_id == tok.eos_id) {
-                std::cout << std::endl;
-                std::cout << "[EOS]" << std::endl;
+                std::cout << std::endl << "[EOS]" << std::endl;
                 break;
             }
 
-            // Decode and print the new token immediately
-            std::string next_tok = tok.decode({next_id});
-            std::cout << next_tok;
+            std::cout << tok.decode({next_id});
             std::cout.flush();
 
-            // Add to sequence for next iteration
             ids.push_back(next_id);
+
+            if ((int)ids.size() >= transformer.cfg.n_ctx) break;
         }
 
-        std::cout << std::endl;
-        std::cout << std::endl;
-        std::cout << "Generated " << max_new_tokens
-                  << " tokens" << std::endl;
+        std::cout << std::endl << std::endl;
+        std::cout << "Generated " << max_new_tokens << " tokens" << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
