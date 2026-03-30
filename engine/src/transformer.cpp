@@ -5,58 +5,34 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
-#include <immintrin.h>
 #include <cstring>
 #include <cstdlib>
 
 namespace laylow {
 
-static void rms_norm(float* out, const float* x, const float* w,
-                     int n, float eps)
-{
+static void rmsnorm(float* o, float* x, float* w, int size) {
     float ss = 0.0f;
-    for (int i = 0; i < n; i++) ss += x[i] * x[i];
-    ss = 1.0f / sqrtf(ss / n + eps);
-    for (int i = 0; i < n; i++)
-        out[i] = x[i] * ss * w[i];
+    for (int j = 0; j < size; j++) ss += x[j] * x[j];
+    ss /= size;
+    ss += 1e-5f;
+    ss = 1.0f / sqrtf(ss);
+    for (int j = 0; j < size; j++) o[j] = w[j] * (ss * x[j]);
 }
 
-static float silu(float x) {
-    return x / (1.0f + expf(-x));
-}
-
-static void softmax(float* x, int n) {
-    float max_val = *std::max_element(x, x + n);
+static void softmax(float* x, int size) {
+    float max_val = x[0];
+    for (int i = 1; i < size; i++) if (x[i] > max_val) max_val = x[i];
     float sum = 0.0f;
-    for (int i = 0; i < n; i++) {
-        x[i] = expf(x[i] - max_val);
-        sum += x[i];
-    }
-    for (int i = 0; i < n; i++) x[i] /= sum;
+    for (int i = 0; i < size; i++) { x[i] = expf(x[i] - max_val); sum += x[i]; }
+    for (int i = 0; i < size; i++) x[i] /= sum;
 }
 
-static void matvec(float* out, const float* mat, const float* vec,
-                   int rows, int cols)
-{
-    for (int i = 0; i < rows; i++) {
-        float sum = 0.0f;
-        const float* row = mat + i * cols;
-        for (int j = 0; j < cols; j++)
-            sum += row[j] * vec[j];
-        out[i] = sum;
-    }
-}
-
-static void rope(float* vec, int pos, int head_dim) {
-    for (int i = 0; i < head_dim; i += 2) {
-        float freq  = 1.0f / powf(10000.0f, (float)i / head_dim);
-        float angle = pos * freq;
-        float cos_a = cosf(angle);
-        float sin_a = sinf(angle);
-        float v0 = vec[i];
-        float v1 = vec[i + 1];
-        vec[i]     = v0 * cos_a - v1 * sin_a;
-        vec[i + 1] = v0 * sin_a + v1 * cos_a;
+// W (d,n) @ x (n,) -> xout (d,)
+static void matmul(float* xout, const float* x, const float* w, int n, int d) {
+    for (int i = 0; i < d; i++) {
+        float val = 0.0f;
+        for (int j = 0; j < n; j++) val += w[i * n + j] * x[j];
+        xout[i] = val;
     }
 }
 
@@ -90,7 +66,6 @@ void Transformer::load(const GGUFFile& gguf) {
               << " head_dim=" << cfg.head_dim
               << " n_ffn="    << cfg.n_ffn    << std::endl;
 
-    // Dequantize a tensor to F32, dispatching on its stored dtype.
     auto get_f32 = [&](const std::string& name) -> float* {
         auto it = gguf.tensors.find(name);
         if (it == gguf.tensors.end()) {
@@ -100,15 +75,13 @@ void Transformer::load(const GGUFFile& gguf) {
         const Tensor& t = it->second;
         if (t.dtype == DType::F32)
             return static_cast<float*>(t.data);
-
         Tensor f32;
         switch (t.dtype) {
             case DType::Q4_0: f32 = dequantize_q4(t);  break;
             case DType::Q8_0: f32 = dequantize_q8(t);  break;
             case DType::Q6_K: f32 = dequantize_q6k(t); break;
             default:
-                std::cerr << "Warning: unsupported dtype for tensor: "
-                          << name << ", skipping" << std::endl;
+                std::cerr << "Warning: unsupported dtype for: " << name << std::endl;
                 return nullptr;
         }
         dequantized_.push_back(std::move(f32));
@@ -118,6 +91,7 @@ void Transformer::load(const GGUFFile& gguf) {
     weights.token_embd  = get_f32("token_embd.weight");
     weights.output_norm = get_f32("output_norm.weight");
     weights.output      = get_f32("output.weight");
+    if (!weights.output) weights.output = weights.token_embd;
 
     weights.layers.resize(cfg.n_layers);
     for (int i = 0; i < cfg.n_layers; i++) {
@@ -138,123 +112,143 @@ void Transformer::load(const GGUFFile& gguf) {
 }
 
 std::vector<float> Transformer::forward(const std::vector<int>& tokens) {
-    const int seq_len = (int)tokens.size();
-    const int n_embd  = cfg.n_embd;
-    const int n_heads = cfg.n_heads;
-    const int n_kv    = cfg.n_heads_kv;
-    const int hd      = cfg.head_dim;
-    const int n_ffn   = cfg.n_ffn;
+    const int seq_len   = (int)tokens.size();
+    const int dim       = cfg.n_embd;
+    const int n_heads   = cfg.n_heads;
+    const int n_kv_heads= cfg.n_heads_kv;
+    const int head_size = cfg.head_dim;
+    const int kv_dim    = (dim * n_kv_heads) / n_heads;
+    const int kv_mul    = n_heads / n_kv_heads;
+    const int hidden_dim= cfg.n_ffn;
 
-    std::vector<float> x(n_embd);
-    std::vector<float> xb(n_embd);
-    std::vector<float> xb2(n_embd);
-    std::vector<float> q(n_heads * hd);
-    std::vector<float> k(n_kv * hd);
-    std::vector<float> v(n_kv * hd);
-    std::vector<float> attn_scores(seq_len);
-    std::vector<float> attn_out(n_embd);
-    std::vector<float> ffn_gate(n_ffn);
-    std::vector<float> ffn_up(n_ffn);
-    std::vector<float> ffn_out(n_embd);
+    // Allocate all buffers exactly like Karpathy
+    std::vector<float> x(dim);
+    std::vector<float> xb(dim);
+    std::vector<float> xb2(dim);
+    std::vector<float> hb(hidden_dim);
+    std::vector<float> hb2(hidden_dim);
+    std::vector<float> q(dim);
+    std::vector<float> att(n_heads * seq_len);
+    std::vector<float> logits(cfg.n_vocab, 0.0f);
 
-    // KV cache: allocated fresh each call since we re-process the full sequence.
-    // For a production engine this should live on the Transformer struct and be
-    // updated incrementally, but correctness comes first.
-    std::vector<std::vector<float>> k_cache(cfg.n_layers,
-        std::vector<float>(cfg.n_ctx * n_kv * hd, 0.0f));
-    std::vector<std::vector<float>> v_cache(cfg.n_layers,
-        std::vector<float>(cfg.n_ctx * n_kv * hd, 0.0f));
+    // KV cache: [n_layers * seq_len * kv_dim]
+    std::vector<float> key_cache(cfg.n_layers * cfg.n_ctx * kv_dim, 0.0f);
+    std::vector<float> val_cache(cfg.n_layers * cfg.n_ctx * kv_dim, 0.0f);
 
+    // Process each token position — exactly like Karpathy's loop
     for (int pos = 0; pos < seq_len; pos++) {
+        int token = tokens[pos];
 
-        // Embedding lookup
+        // Copy token embedding into x
         if (weights.token_embd) {
-            const float* emb = weights.token_embd + tokens[pos] * n_embd;
-            std::copy(emb, emb + n_embd, x.begin());
+            float* content_row = weights.token_embd + token * dim;
+            memcpy(x.data(), content_row, dim * sizeof(float));
         }
 
-        for (int layer = 0; layer < cfg.n_layers; layer++) {
-            auto& l = weights.layers[layer];
-            if (!l.attn_norm || !l.attn_q || !l.attn_k ||
-                !l.attn_v    || !l.attn_out) continue;
+        // Forward all layers
+        for (int l = 0; l < cfg.n_layers; l++) {
+            auto& lw = weights.layers[l];
+            if (!lw.attn_norm || !lw.attn_q || !lw.attn_k ||
+                !lw.attn_v   || !lw.attn_out) continue;
 
-            // Pre-attention RMS norm
-            rms_norm(xb.data(), x.data(), l.attn_norm, n_embd, cfg.norm_eps);
+            // Attention rmsnorm
+            rmsnorm(xb.data(), x.data(), lw.attn_norm, dim);
 
-            // Q K V projections
-            matvec(q.data(), l.attn_q, xb.data(), n_heads * hd, n_embd);
-            matvec(k.data(), l.attn_k, xb.data(), n_kv    * hd, n_embd);
-            matvec(v.data(), l.attn_v, xb.data(), n_kv    * hd, n_embd);
+            // KV cache layer offset
+            int loff = l * cfg.n_ctx * kv_dim;
 
-            // Rotary position embeddings
-            for (int h = 0; h < n_heads; h++)
-                rope(q.data() + h * hd, pos, hd);
-            for (int h = 0; h < n_kv; h++)
-                rope(k.data() + h * hd, pos, hd);
+            // Pointers directly into KV cache for current position
+            float* k = key_cache.data() + loff + pos * kv_dim;
+            float* v = val_cache.data() + loff + pos * kv_dim;
 
-            // Write current position into KV cache
-            std::copy(k.begin(), k.end(),
-                      k_cache[layer].begin() + pos * n_kv * hd);
-            std::copy(v.begin(), v.end(),
-                      v_cache[layer].begin() + pos * n_kv * hd);
+            // QKV matmuls
+            matmul(q.data(), xb.data(), lw.attn_q, dim, dim);
+            matmul(k,        xb.data(), lw.attn_k, dim, kv_dim);
+            matmul(v,        xb.data(), lw.attn_v, dim, kv_dim);
 
-            // Grouped-query attention
-            float scale = 1.0f / sqrtf((float)hd);
-            std::fill(attn_out.begin(), attn_out.end(), 0.0f);
-
-            for (int h = 0; h < n_heads; h++) {
-                int kv_h = h % n_kv;  // GQA: map query head to its KV head
-                const float* qh = q.data() + h * hd;
-
-                for (int t = 0; t <= pos; t++) {
-                    const float* kt = k_cache[layer].data()
-                                      + t * n_kv * hd + kv_h * hd;
-                    float dot = 0.0f;
-                    for (int d = 0; d < hd; d++) dot += qh[d] * kt[d];
-                    attn_scores[t] = dot * scale;
-                }
-
-                softmax(attn_scores.data(), pos + 1);
-
-                float* out_h = attn_out.data() + h * hd;
-                for (int t = 0; t <= pos; t++) {
-                    const float* vt = v_cache[layer].data()
-                                      + t * n_kv * hd + kv_h * hd;
-                    for (int d = 0; d < hd; d++)
-                        out_h[d] += attn_scores[t] * vt[d];
+            // RoPE — exactly like Karpathy: iterate over dim, use i % head_size
+            for (int i = 0; i < dim; i += 2) {
+                int head_dim = i % head_size;
+                float freq   = 1.0f / powf(10000.0f, head_dim / (float)head_size);
+                float val    = pos * freq;
+                float fcr    = cosf(val);
+                float fci    = sinf(val);
+                int rotn     = i < kv_dim ? 2 : 1;
+                for (int rv = 0; rv < rotn; rv++) {
+                    float* vec = rv == 0 ? q.data() : k;
+                    float v0   = vec[i];
+                    float v1   = vec[i + 1];
+                    vec[i]     = v0 * fcr - v1 * fci;
+                    vec[i + 1] = v0 * fci + v1 * fcr;
                 }
             }
 
-            // Output projection + residual connection
-            matvec(xb2.data(), l.attn_out, attn_out.data(), n_embd, n_embd);
-            for (int i = 0; i < n_embd; i++) x[i] += xb2[i];
+            // Multihead attention
+            for (int h = 0; h < n_heads; h++) {
+                float* qh  = q.data() + h * head_size;
+                float* ath = att.data() + h * seq_len;
 
-            // Feed-forward network
-            if (!l.ffn_norm || !l.ffn_gate || !l.ffn_up || !l.ffn_down)
+                // Attention scores
+                for (int t = 0; t <= pos; t++) {
+                    float* kh  = key_cache.data() + loff + t * kv_dim
+                                 + (h / kv_mul) * head_size;
+                    float score = 0.0f;
+                    for (int i = 0; i < head_size; i++)
+                        score += qh[i] * kh[i];
+                    score /= sqrtf((float)head_size);
+                    ath[t] = score;
+                }
+
+                softmax(ath, pos + 1);
+
+                // Weighted sum into xb
+                float* xbh = xb.data() + h * head_size;
+                memset(xbh, 0, head_size * sizeof(float));
+                for (int t = 0; t <= pos; t++) {
+                    float* vh = val_cache.data() + loff + t * kv_dim
+                                + (h / kv_mul) * head_size;
+                    float a = ath[t];
+                    for (int i = 0; i < head_size; i++)
+                        xbh[i] += a * vh[i];
+                }
+            }
+
+            // Output projection
+            matmul(xb2.data(), xb.data(), lw.attn_out, dim, dim);
+
+            // Residual
+            for (int i = 0; i < dim; i++) x[i] += xb2[i];
+
+            // FFN
+            if (!lw.ffn_norm || !lw.ffn_gate || !lw.ffn_up || !lw.ffn_down)
                 continue;
 
-            rms_norm(xb.data(), x.data(), l.ffn_norm, n_embd, cfg.norm_eps);
+            rmsnorm(xb.data(), x.data(), lw.ffn_norm, dim);
 
-            matvec(ffn_gate.data(), l.ffn_gate, xb.data(), n_ffn, n_embd);
-            matvec(ffn_up.data(),   l.ffn_up,   xb.data(), n_ffn, n_embd);
+            matmul(hb.data(),  xb.data(), lw.ffn_gate, dim, hidden_dim);
+            matmul(hb2.data(), xb.data(), lw.ffn_up,   dim, hidden_dim);
 
-            // SwiGLU activation
-            for (int i = 0; i < n_ffn; i++)
-                ffn_gate[i] = silu(ffn_gate[i]) * ffn_up[i];
+            // SwiGLU: silu(gate) * up
+            for (int i = 0; i < hidden_dim; i++) {
+                float val = hb[i];
+                val *= (1.0f / (1.0f + expf(-val))); // silu
+                val *= hb2[i];
+                hb[i] = val;
+            }
 
-            matvec(ffn_out.data(), l.ffn_down, ffn_gate.data(), n_embd, n_ffn);
-            for (int i = 0; i < n_embd; i++) x[i] += ffn_out[i];
+            matmul(xb.data(), hb.data(), lw.ffn_down, hidden_dim, dim);
+
+            // Residual
+            for (int i = 0; i < dim; i++) x[i] += xb[i];
         }
     }
 
-    // Final RMS norm
+    // Final rmsnorm
     if (weights.output_norm)
-        rms_norm(x.data(), x.data(), weights.output_norm, n_embd, cfg.norm_eps);
+        rmsnorm(x.data(), x.data(), weights.output_norm, dim);
 
-    // Project to vocabulary logits
-    std::vector<float> logits(cfg.n_vocab, 0.0f);
-    if (weights.output)
-        matvec(logits.data(), weights.output, x.data(), cfg.n_vocab, n_embd);
+    // Classifier
+    matmul(logits.data(), x.data(), weights.output, dim, cfg.n_vocab);
 
     return logits;
 }
@@ -321,10 +315,8 @@ void Transformer::apply_rep_penalty(std::vector<float>& logits,
 {
     for (int id : prev_tokens) {
         if (id >= 0 && id < (int)logits.size()) {
-            if (logits[id] > 0)
-                logits[id] /= penalty;
-            else
-                logits[id] *= penalty;
+            if (logits[id] > 0) logits[id] /= penalty;
+            else logits[id] *= penalty;
         }
     }
 }
