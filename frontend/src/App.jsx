@@ -530,6 +530,30 @@ export default function App() {
     ))
   }
 
+const [memoryFacts, setMemoryFacts] = useState([])
+
+  // Load memory on startup
+  useEffect(() => {
+    fetch(`${API}/memory`)
+      .then(r => r.json())
+      .then(data => setMemoryFacts(data.facts || []))
+      .catch(() => {})
+  }, [])
+
+  // Refresh memory after each message
+  const refreshMemory = () => {
+    fetch(`${API}/memory`)
+      .then(r => r.json())
+      .then(data => setMemoryFacts(data.facts || []))
+      .catch(() => {})
+  }
+
+  const clearMemory = () => {
+    fetch(`${API}/memory`, { method: "DELETE" })
+      .then(() => setMemoryFacts([]))
+      .catch(() => {})
+  }
+
   const newChat = () => {
     const id = Date.now()
     setChats(prev => [...prev, { id, title: "New chat", messages: [] }])
@@ -652,6 +676,47 @@ export default function App() {
       <style>{STYLES}</style>
       <div className="app">
         <div className="orb1" /><div className="orb2" />
+{/* Memory indicator */}
+          <div style={{
+            padding: "8px 12px",
+            background: "rgba(255,255,255,0.03)",
+            borderRadius: "10px",
+            border: "1px solid rgba(255,255,255,0.06)",
+            marginBottom: "8px"
+          }}>
+            <div style={{
+              fontSize: "10px",
+              color: "rgba(255,255,255,0.3)",
+              textTransform: "uppercase",
+              letterSpacing: "0.8px",
+              marginBottom: "6px"
+            }}>Memory</div>
+            <div style={{
+              fontSize: "12px",
+              color: "rgba(255,255,255,0.5)"
+            }}>
+              {memoryFacts.length > 0
+                ? `${memoryFacts.length} fact${memoryFacts.length > 1 ? "s" : ""} remembered`
+                : "Nothing remembered yet"}
+            </div>
+            {memoryFacts.length > 0 && (
+              <button
+                onClick={clearMemory}
+                style={{
+                  marginTop: "6px",
+                  fontSize: "11px",
+                  color: "rgba(255,100,100,0.6)",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "0",
+                  fontFamily: "inherit"
+                }}
+              >
+                Clear memory
+              </button>
+            )}
+          </div>
 
         {/* Sidebar */}
         <div className="sidebar">

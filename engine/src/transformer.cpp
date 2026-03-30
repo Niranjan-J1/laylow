@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <vector>
+#include <thread>
 
 namespace laylow {
 
@@ -29,11 +31,27 @@ static void softmax(float* x, int size) {
 
 // W (d,n) @ x (n,) -> xout (d,)
 static void matmul(float* xout, const float* x, const float* w, int n, int d) {
-    for (int i = 0; i < d; i++) {
-        float val = 0.0f;
-        for (int j = 0; j < n; j++) val += w[i * n + j] * x[j];
-        xout[i] = val;
+    // Split rows across threads
+    const int n_threads = 8; // tune to your CPU core count
+    std::vector<std::thread> threads;
+    int chunk = (d + n_threads - 1) / n_threads;
+
+    for (int t = 0; t < n_threads; t++) {
+        int start = t * chunk;
+        int end   = std::min(start + chunk, d);
+        if (start >= d) break;
+
+        threads.emplace_back([=]() {
+            for (int i = start; i < end; i++) {
+                float val = 0.0f;
+                const float* row = w + i * n;
+                for (int j = 0; j < n; j++) val += row[j] * x[j];
+                xout[i] = val;
+            }
+        });
     }
+
+    for (auto& th : threads) th.join();
 }
 
 void Transformer::load(const GGUFFile& gguf) {
@@ -111,101 +129,104 @@ void Transformer::load(const GGUFFile& gguf) {
     std::cout << "Weights loaded for " << cfg.n_layers << " layers" << std::endl;
 }
 
-std::vector<float> Transformer::forward(const std::vector<int>& tokens) {
-    const int seq_len   = (int)tokens.size();
-    const int dim       = cfg.n_embd;
-    const int n_heads   = cfg.n_heads;
-    const int n_kv_heads= cfg.n_heads_kv;
-    const int head_size = cfg.head_dim;
-    const int kv_dim    = (dim * n_kv_heads) / n_heads;
-    const int kv_mul    = n_heads / n_kv_heads;
-    const int hidden_dim= cfg.n_ffn;
+void Transformer::init_cache() {
+    int kv_dim = (cfg.n_embd * cfg.n_heads_kv) / cfg.n_heads;
+    key_cache_.assign(cfg.n_layers * cfg.n_ctx * kv_dim, 0.0f);
+    val_cache_.assign(cfg.n_layers * cfg.n_ctx * kv_dim, 0.0f);
+    cache_pos_ = 0;
+}
 
-    // Allocate all buffers exactly like Karpathy
+void Transformer::reset_cache() {
+    cache_pos_ = 0;
+}
+
+std::vector<float> Transformer::forward(const std::vector<int>& tokens) {
+    const int dim        = cfg.n_embd;
+    const int n_heads    = cfg.n_heads;
+    const int n_kv_heads = cfg.n_heads_kv;
+    const int head_size  = cfg.head_dim;
+    const int kv_dim     = (dim * n_kv_heads) / n_heads;
+    const int kv_mul     = n_heads / n_kv_heads;
+    const int hidden_dim = cfg.n_ffn;
+
+    // Initialize cache on first use
+    if (key_cache_.empty()) init_cache();
+
+    // Determine which tokens to process
+    // If cache is empty, process all tokens (prompt)
+    // If cache has content, only process new tokens
+    int start_pos = cache_pos_;
+    int seq_len   = (int)tokens.size();
+
     std::vector<float> x(dim);
     std::vector<float> xb(dim);
     std::vector<float> xb2(dim);
     std::vector<float> hb(hidden_dim);
     std::vector<float> hb2(hidden_dim);
     std::vector<float> q(dim);
-    std::vector<float> att(n_heads * seq_len);
+    std::vector<float> att(n_heads * cfg.n_ctx);
     std::vector<float> logits(cfg.n_vocab, 0.0f);
 
-    // KV cache: [n_layers * seq_len * kv_dim]
-    std::vector<float> key_cache(cfg.n_layers * cfg.n_ctx * kv_dim, 0.0f);
-    std::vector<float> val_cache(cfg.n_layers * cfg.n_ctx * kv_dim, 0.0f);
-
-    // Process each token position — exactly like Karpathy's loop
-    for (int pos = 0; pos < seq_len; pos++) {
+    // Process only new tokens
+    for (int pos = start_pos; pos < seq_len; pos++) {
         int token = tokens[pos];
 
-        // Copy token embedding into x
         if (weights.token_embd) {
-            float* content_row = weights.token_embd + token * dim;
-            memcpy(x.data(), content_row, dim * sizeof(float));
+            float* row = weights.token_embd + token * dim;
+            memcpy(x.data(), row, dim * sizeof(float));
         }
 
-        // Forward all layers
         for (int l = 0; l < cfg.n_layers; l++) {
             auto& lw = weights.layers[l];
             if (!lw.attn_norm || !lw.attn_q || !lw.attn_k ||
                 !lw.attn_v   || !lw.attn_out) continue;
 
-            // Attention rmsnorm
             rmsnorm(xb.data(), x.data(), lw.attn_norm, dim);
 
-            // KV cache layer offset
             int loff = l * cfg.n_ctx * kv_dim;
+            float* k = key_cache_.data() + loff + pos * kv_dim;
+            float* v = val_cache_.data() + loff + pos * kv_dim;
 
-            // Pointers directly into KV cache for current position
-            float* k = key_cache.data() + loff + pos * kv_dim;
-            float* v = val_cache.data() + loff + pos * kv_dim;
-
-            // QKV matmuls
             matmul(q.data(), xb.data(), lw.attn_q, dim, dim);
             matmul(k,        xb.data(), lw.attn_k, dim, kv_dim);
             matmul(v,        xb.data(), lw.attn_v, dim, kv_dim);
 
-            // RoPE — exactly like Karpathy: iterate over dim, use i % head_size
+            // RoPE
             for (int i = 0; i < dim; i += 2) {
-                int head_dim = i % head_size;
-                float freq   = 1.0f / powf(10000.0f, head_dim / (float)head_size);
-                float val    = pos * freq;
-                float fcr    = cosf(val);
-                float fci    = sinf(val);
-                int rotn     = i < kv_dim ? 2 : 1;
+                int hd   = i % head_size;
+                float freq = 1.0f / powf(10000.0f, hd / (float)head_size);
+                float val  = pos * freq;
+                float fcr  = cosf(val);
+                float fci  = sinf(val);
+                int rotn   = i < kv_dim ? 2 : 1;
                 for (int rv = 0; rv < rotn; rv++) {
                     float* vec = rv == 0 ? q.data() : k;
-                    float v0   = vec[i];
-                    float v1   = vec[i + 1];
-                    vec[i]     = v0 * fcr - v1 * fci;
-                    vec[i + 1] = v0 * fci + v1 * fcr;
+                    float v0 = vec[i], v1 = vec[i+1];
+                    vec[i]   = v0*fcr - v1*fci;
+                    vec[i+1] = v0*fci + v1*fcr;
                 }
             }
 
-            // Multihead attention
+            // Attention over all cached positions
             for (int h = 0; h < n_heads; h++) {
                 float* qh  = q.data() + h * head_size;
-                float* ath = att.data() + h * seq_len;
+                float* ath = att.data() + h * cfg.n_ctx;
 
-                // Attention scores
                 for (int t = 0; t <= pos; t++) {
-                    float* kh  = key_cache.data() + loff + t * kv_dim
-                                 + (h / kv_mul) * head_size;
+                    float* kh = key_cache_.data() + loff + t * kv_dim
+                                + (h / kv_mul) * head_size;
                     float score = 0.0f;
                     for (int i = 0; i < head_size; i++)
                         score += qh[i] * kh[i];
-                    score /= sqrtf((float)head_size);
-                    ath[t] = score;
+                    ath[t] = score / sqrtf((float)head_size);
                 }
 
                 softmax(ath, pos + 1);
 
-                // Weighted sum into xb
                 float* xbh = xb.data() + h * head_size;
                 memset(xbh, 0, head_size * sizeof(float));
                 for (int t = 0; t <= pos; t++) {
-                    float* vh = val_cache.data() + loff + t * kv_dim
+                    float* vh = val_cache_.data() + loff + t * kv_dim
                                 + (h / kv_mul) * head_size;
                     float a = ath[t];
                     for (int i = 0; i < head_size; i++)
@@ -213,43 +234,34 @@ std::vector<float> Transformer::forward(const std::vector<int>& tokens) {
                 }
             }
 
-            // Output projection
             matmul(xb2.data(), xb.data(), lw.attn_out, dim, dim);
-
-            // Residual
             for (int i = 0; i < dim; i++) x[i] += xb2[i];
 
-            // FFN
             if (!lw.ffn_norm || !lw.ffn_gate || !lw.ffn_up || !lw.ffn_down)
                 continue;
 
             rmsnorm(xb.data(), x.data(), lw.ffn_norm, dim);
-
             matmul(hb.data(),  xb.data(), lw.ffn_gate, dim, hidden_dim);
             matmul(hb2.data(), xb.data(), lw.ffn_up,   dim, hidden_dim);
 
-            // SwiGLU: silu(gate) * up
             for (int i = 0; i < hidden_dim; i++) {
                 float val = hb[i];
-                val *= (1.0f / (1.0f + expf(-val))); // silu
+                val *= (1.0f / (1.0f + expf(-val)));
                 val *= hb2[i];
                 hb[i] = val;
             }
 
             matmul(xb.data(), hb.data(), lw.ffn_down, hidden_dim, dim);
-
-            // Residual
             for (int i = 0; i < dim; i++) x[i] += xb[i];
         }
+
+        cache_pos_ = pos + 1;
     }
 
-    // Final rmsnorm
     if (weights.output_norm)
         rmsnorm(x.data(), x.data(), weights.output_norm, dim);
 
-    // Classifier
     matmul(logits.data(), x.data(), weights.output, dim, cfg.n_vocab);
-
     return logits;
 }
 

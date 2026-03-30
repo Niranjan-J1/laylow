@@ -64,6 +64,15 @@ struct Transformer {
     int sample_topp(const std::vector<float>& logits,
                     float temp = 0.9f, float top_p = 0.9f);
     std::vector<Tensor> dequantized_; // holds dequantized weight buffers
+
+        // Persistent KV cache - lives across forward() calls
+    std::vector<float> key_cache_;
+    std::vector<float> val_cache_;
+    int                cache_pos_ = 0;  // how many tokens are cached
+
+    // Initialize cache for a given context size
+    void init_cache();
+    void reset_cache();
 };
 
 } // namespace laylow
