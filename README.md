@@ -7,7 +7,7 @@
 
 ## Demo
 
-*← drop your GIF here*
+
 
 ---
 
